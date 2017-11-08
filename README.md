@@ -4,7 +4,7 @@ Fuzzy xlsx/xls/csv decoder
 ```go
 // filenames: "this_is_a_test (1).csv"
 //            "this_is_a_test (2).xlsx"
-//            "ThisTest.xlsx"
+//            "ThisTest and stuff.xls"
 
 file, _ := xl.Open(`_is_a_`, xl.OpenLast)
 
