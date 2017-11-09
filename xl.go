@@ -18,9 +18,7 @@ import (
 )
 
 type File struct {
-	xlsx *xlsx.File
-	xls  *xls.WorkBook
-	csv  [][]string
+	xl xler
 }
 
 type OpenFunc func(a, b string) bool
@@ -63,10 +61,14 @@ func Open(expr string, better OpenFunc) (*File, error) {
 	match := matches[0]
 	log.Println([]string{match})
 
-	var xlf File
+	var x xler
 	if i := strings.LastIndex(match, "."); i != -1 && match[i:] == ".xlsx" {
 		println(`found ` + match[i:])
-		xlf.xlsx, err = xlsx.OpenFile(match)
+		f, err := xlsx.OpenFile(match)
+		if err != nil {
+			return nil, err
+		}
+		x = xlsxf{f}
 	} else if match[i:] == ".csv" {
 		println(`found ` + match[i:])
 		f, err := os.Open(match)
@@ -74,19 +76,24 @@ func Open(expr string, better OpenFunc) (*File, error) {
 			return nil, err
 		}
 		r := csv.NewReader(f)
-		xlf.csv, err = r.ReadAll()
+		c, err := r.ReadAll()
 		if err != nil {
 			return nil, err
 		}
 		err = f.Close()
+		x = csvf{c}
 	} else if match[i:] == ".xls" {
-		xlf.xls, err = xls.Open(match, "")
+		f, err := xls.Open(match, "")
+		if err != nil {
+			return nil, err
+		}
+		x = xlsf{f}
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	return &xlf, nil
+	return &File{x}, nil
 }
 
 type heuristics struct {
@@ -141,110 +148,90 @@ func (f File) Decode(v interface{}) error {
 		})
 	}
 
-	if f.xls != nil {
-		for Si := 0; Si < f.xls.NumSheets(); Si++ {
-			s := f.xls.GetSheet(Si)
-			if s.MaxRow < 1 {
-				continue
-			}
-
-			// determine columns using first row
-			r := s.Row(0)
-			for Ci := 0; Ci <= r.LastCol(); Ci++ {
-				c := r.Col(Ci)
-				for _, H := range heurs {
-					if !H.k.MatchString(c) {
-						continue
-					}
-					H.shColErrs = append(H.shColErrs, [3]int{Si, Ci, 0})
-					// log.Println(`[3]int{Si, Ci, 0}`, [3]int{Si, Ci, 0})
+	for Si := 0; Si < f.xl.Sheets(); Si++ {
+		if f.xl.Rows(Si) < 1 {
+			continue
+		}
+		// determine columns using first row
+		for Ci := 0; Ci <= f.xl.Cols(Si, 0); Ci++ {
+			c := f.xl.Cell(Si, 0, Ci)
+			for _, H := range heurs {
+				if !H.k.MatchString(c) {
+					continue
 				}
+				H.shColErrs = append(H.shColErrs, [3]int{Si, Ci, 0})
+				// log.Println(`[3]int{Si, Ci, 0}`, [3]int{Si, Ci, 0})
 			}
 		}
+	}
 
-		var maxL int
+	var maxL int
 
-		// check all matches at (sheet, column) and count parsing errors
-		for _, H := range heurs {
-			for sce, shColErrs := range H.shColErrs {
-				Si, Ci, errs := shColErrs[0], shColErrs[1], shColErrs[2]
-				s := f.xls.GetSheet(Si)
-				maxL = int(s.MaxRow) + 1
-
-				for Ri := 1; Ri < maxL; Ri++ {
-					c := s.Row(Ri).Col(Ci)
-
-					if H.v != nil && !H.v.MatchString(c) {
-						errs++
-						continue
-					}
-
-					switch H.kind {
-					case reflect.Int:
-						_, err := strconv.Atoi(c)
-						if err != nil {
-							errs++
-						}
-					case reflect.Float64:
-						_, err := strconv.ParseFloat(c, 64)
-						if err != nil {
-							errs++
-						}
-					}
-				}
-				H.shColErrs[sce][2] = errs
-			}
-		}
-		// println(`maxL`, maxL)
-
-		val.Set(reflect.MakeSlice(t, maxL-1, maxL-1))
-
-		for _, H := range heurs {
-			sort.Slice(H.shColErrs, func(i, j int) bool {
-				return H.shColErrs[i][2] < H.shColErrs[j][2]
-			})
-			if H.shColErrs[0][2] == maxL {
-				return errors.New("no pattern match")
-			}
-			Si := H.shColErrs[0][0]
-			Ci := H.shColErrs[0][1]
-			i := H.index
+	// check all matches at (sheet, column) and count parsing errors
+	for _, H := range heurs {
+		for sce, shColErrs := range H.shColErrs {
+			Si, Ci, errs := shColErrs[0], shColErrs[1], shColErrs[2]
+			maxL = f.xl.Rows(Si)
 
 			for Ri := 1; Ri < maxL; Ri++ {
-				c := f.xls.GetSheet(Si).Row(Ri).Col(Ci)
+				c := f.xl.Cell(Si, Ri, Ci)
 
-				var rv reflect.Value
-				switch H.kind {
-				case reflect.Int:
-					x, _ := strconv.Atoi(c)
-					rv = reflect.ValueOf(x)
-				case reflect.Float64:
-					x, _ := strconv.ParseFloat(c, 64)
-					rv = reflect.ValueOf(x)
-				case reflect.String:
-					rv = reflect.ValueOf(c)
-				default:
-					return errors.New("type not supported")
+				if H.v != nil && !H.v.MatchString(c) {
+					errs++
+					continue
 				}
 
-				val.Index(Ri - 1).Field(i).Set(rv)
+				switch H.kind {
+				case reflect.Int:
+					_, err := strconv.Atoi(c)
+					if err != nil {
+						errs++
+					}
+				case reflect.Float64:
+					_, err := strconv.ParseFloat(c, 64)
+					if err != nil {
+						errs++
+					}
+				}
+			}
+			H.shColErrs[sce][2] = errs
+		}
+	}
+	// println(`maxL`, maxL)
+
+	val.Set(reflect.MakeSlice(t, maxL-1, maxL-1))
+
+	for _, H := range heurs {
+		sort.Slice(H.shColErrs, func(i, j int) bool {
+			return H.shColErrs[i][2] < H.shColErrs[j][2]
+		})
+		if H.shColErrs[0][2] == maxL {
+			return errors.New("no pattern match")
+		}
+
+		Si := H.shColErrs[0][0]
+		Ci := H.shColErrs[0][1]
+
+		for Ri := 1; Ri < maxL; Ri++ {
+			c := f.xl.Cell(Si, Ri, Ci)
+
+			var rv reflect.Value
+			switch H.kind {
+			case reflect.Int:
+				x, _ := strconv.Atoi(c)
+				rv = reflect.ValueOf(x)
+			case reflect.Float64:
+				x, _ := strconv.ParseFloat(c, 64)
+				rv = reflect.ValueOf(x)
+			case reflect.String:
+				rv = reflect.ValueOf(c)
+			default:
+				return errors.New("type not supported")
 			}
 
-			// log.Printf("reflectIdx:%d sheet:%d col:%d", i, Si, Ci)
+			val.Index(Ri - 1).Field(H.index).Set(rv)
 		}
 	}
 
 	return nil
 }
-
-// func (f File) decodeXLSX(v interface{}) error {
-
-// }
-
-// func (f File) decodeXLS(v interface{}) error {
-
-// }
-
-// func (f File) decodeCSV(v interface{}) error {
-
-// }
