@@ -182,6 +182,11 @@ func (f File) Decode(v interface{}) error {
 				}
 
 				switch H.kind {
+				case reflect.Bool:
+					_, err := strconv.ParseBool(c)
+					if err != nil {
+						errs++
+					}
 				case reflect.Int:
 					_, err := strconv.Atoi(c)
 					if err != nil {
@@ -217,6 +222,9 @@ func (f File) Decode(v interface{}) error {
 
 			var rv reflect.Value
 			switch H.kind {
+			case reflect.Bool:
+				x, _ := strconv.ParseBool(c)
+				rv = reflect.ValueOf(x)
 			case reflect.Int:
 				x, _ := strconv.Atoi(c)
 				rv = reflect.ValueOf(x)
