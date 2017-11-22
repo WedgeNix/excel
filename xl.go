@@ -3,7 +3,6 @@ package xl
 import (
 	"encoding/csv"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +17,8 @@ import (
 )
 
 type File struct {
-	xl xler
+	Name string
+	xl   xler
 }
 
 type OpenFunc func(a, b string) bool
@@ -46,10 +46,10 @@ func Open(expr string, better OpenFunc) (*File, error) {
 		return nil, err
 	}
 	if len(matches) == 0 {
-		return nil, errors.New("no match")
+		return nil, errors.New("no name")
 	}
 
-	log.Println(matches)
+	// log.Println(matches)
 
 	if better == nil && len(matches) > 1 {
 		return nil, errors.New("too many matches")
@@ -58,20 +58,20 @@ func Open(expr string, better OpenFunc) (*File, error) {
 			return better(matches[i], matches[j])
 		})
 	}
-	match := matches[0]
-	log.Println([]string{match})
+	name := matches[0]
+	// log.Println([]string{name})
 
 	var x xler
-	if i := strings.LastIndex(match, "."); i != -1 && match[i:] == ".xlsx" {
-		println(`found ` + match[i:])
-		f, err := xlsx.OpenFile(match)
+	if i := strings.LastIndex(name, "."); i != -1 && name[i:] == ".xlsx" {
+		// println(`found ` + name[i:])
+		f, err := xlsx.OpenFile(name)
 		if err != nil {
 			return nil, err
 		}
 		x = xlsxf{f}
-	} else if match[i:] == ".csv" {
-		println(`found ` + match[i:])
-		f, err := os.Open(match)
+	} else if name[i:] == ".csv" {
+		// println(`found ` + name[i:])
+		f, err := os.Open(name)
 		if err != nil {
 			return nil, err
 		}
@@ -82,8 +82,8 @@ func Open(expr string, better OpenFunc) (*File, error) {
 		}
 		err = f.Close()
 		x = csvf{c}
-	} else if match[i:] == ".xls" {
-		f, err := xls.Open(match, "")
+	} else if name[i:] == ".xls" {
+		f, err := xls.Open(name, "")
 		if err != nil {
 			return nil, err
 		}
@@ -93,7 +93,7 @@ func Open(expr string, better OpenFunc) (*File, error) {
 		return nil, err
 	}
 
-	return &File{x}, nil
+	return &File{name, x}, nil
 }
 
 type heuristics struct {
@@ -124,6 +124,11 @@ func (f File) Decode(v interface{}) error {
 
 	for i := 0; i < e.NumField(); i++ {
 		fld := e.Field(i)
+
+		// _ = `[A-Za-z]+[^A-Za-z]*[A-Za-z]+`
+		// fldSep.Split(fld.Name, -1)
+		// strings.SplitAfter()
+
 		key, ok := fld.Tag.Lookup("key")
 		if !ok {
 			return errors.New("missing struct tag 'key'")
@@ -211,7 +216,7 @@ func (f File) Decode(v interface{}) error {
 			return H.shColErrs[i][2] < H.shColErrs[j][2]
 		})
 		if H.shColErrs[0][2] == maxL {
-			return errors.New("no pattern match")
+			return errors.New("no pattern name")
 		}
 
 		Si := H.shColErrs[0][0]
