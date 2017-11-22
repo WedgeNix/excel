@@ -124,7 +124,6 @@ func (f File) Decode(v interface{}) error {
 
 	for i := 0; i < e.NumField(); i++ {
 		fld := e.Field(i)
-		println("fld.Name", fld.Name)
 
 		// _ = `[A-Za-z]+[^A-Za-z]*[A-Za-z]+`
 		// fldSep.Split(fld.Name, -1)
