@@ -15,5 +15,8 @@ func (c csvf) Cols(sheet, row int) int {
 }
 
 func (c csvf) Cell(sheet, row, col int) string {
+	if L := c.Cols(sheet, row); col >= L {
+		println("cols", col, "vs", L-1)
+	}
 	return c.c[row][col]
 }

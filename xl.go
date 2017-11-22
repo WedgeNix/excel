@@ -124,6 +124,7 @@ func (f File) Decode(v interface{}) error {
 
 	for i := 0; i < e.NumField(); i++ {
 		fld := e.Field(i)
+		println("fld.Name", fld.Name)
 
 		// _ = `[A-Za-z]+[^A-Za-z]*[A-Za-z]+`
 		// fldSep.Split(fld.Name, -1)
@@ -131,7 +132,7 @@ func (f File) Decode(v interface{}) error {
 
 		key, ok := fld.Tag.Lookup("key")
 		if !ok {
-			return errors.New("missing struct tag 'key'")
+			key = `(?i)` + fld.Name
 		}
 		kregex, err := regexp.Compile(key)
 		if err != nil {
@@ -158,7 +159,7 @@ func (f File) Decode(v interface{}) error {
 			continue
 		}
 		// determine columns using first row
-		for Ci := 0; Ci <= f.xl.Cols(Si, 0); Ci++ {
+		for Ci := 0; Ci < f.xl.Cols(Si, 0); Ci++ {
 			c := f.xl.Cell(Si, 0, Ci)
 			for _, H := range heurs {
 				if !H.k.MatchString(c) {
