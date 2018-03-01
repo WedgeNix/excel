@@ -1,4 +1,4 @@
-package xl
+package excel
 
 type xler interface {
 	Sheets() int

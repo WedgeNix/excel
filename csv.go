@@ -1,4 +1,4 @@
-package xl
+package excel
 
 type csvf struct{ c [][]string }
 

@@ -1,4 +1,4 @@
-package xl
+package excel
 
 import "github.com/extrame/xls"
 

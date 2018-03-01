@@ -1,19 +1,43 @@
-# xl
-Fuzzy xlsx/xls/csv decoder
+# excel
+Unmarshaler for xlsx/xls/csv
 
 ```go
-// filenames: "this_is_a_test (1).csv"
-//            "this_is_a_test (2).xlsx"
-//            "ThisTest and stuff.xls"
+// col1 , col2 , date
+//  val ,  2.1 , 2018/3/1
+//  val ,  0.9 , 2018/2/1
+//  abc ,    2 , 2018/1/1
 
-file, _ := xl.Open(`_is_a_`, xl.OpenLast)
+f := excel.File{Name: "test.csv"}
 
-// the following struct tags, 'key' and 'value',
-// allow regular expression matches for headers (keys) and columns (values)
-
-var data []struct {
-    SKU string `key:"[Cc]atalog(ue)? ?[Nn]o" value:"[^-]{4}-[0-9]{4}"`
-    ATS int    `key:"O[Tt][Ss]|A[Tt][Ss]"`
+type Date struct {
+    Col1 string
+    Col2 float64
 }
-file.Decode(&data)
+var dates map[time.Time][]Date
+if err := f.Unmarshal(&dates); err != nil {
+    // handle err
+}
+
+for date, ln := range dates {
+    //
+}
+
+//
+//
+
+f := excel.File{Name: "test.csv"}
+
+type whatever struct {
+    Col1 string
+    Col2 float64
+    Date time.Time
+}
+var data []whatever
+if err := f.Unmarshal(&data); err != nil {
+    // handle err
+}
+
+for _, ln := range data {
+    //
+}
 ```
