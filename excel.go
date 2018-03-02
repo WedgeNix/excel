@@ -52,6 +52,12 @@ var excel = File{
 	Comma: ',',
 }
 
+type Err struct{ error }
+
+func (e Err) Error() string {
+	return "excel: " + error(e).Error()
+}
+
 // File is the generic Excel API controller.
 type File struct {
 	initOnce sync.Once
@@ -70,16 +76,17 @@ func (file *File) init() error {
 			file.Comma = excel.Comma
 		}
 
-		var x xler
+		var sheets [][][]string
+
 		ext := filepath.Ext(file.Name)
 		switch ext {
 		case ".xlsx":
-			f, err := xlsx.OpenFile(file.Name)
+			c, err := xlsx.FileToSlice(file.Name)
 			if err != nil {
 				initErr = err
 				return
 			}
-			x = xlsxf{f}
+			sheets = c
 		case ".csv", ".txt":
 			f, err := os.Open(file.Name)
 			if err != nil {
@@ -94,15 +101,15 @@ func (file *File) init() error {
 				initErr = err
 				return
 			}
-			err = f.Close()
-			x = csvf{c}
+			f.Close()
+			sheets = [][][]string{c}
 		case ".xls":
 			f, err := xls.Open(file.Name, "")
 			if err != nil {
 				initErr = err
 				return
 			}
-			x = csvf{f.ReadAllCells()}
+			sheets = [][][]string{f.ReadAllCells()}
 		default:
 			initErr = errors.New("'" + ext + "' is not an Excel format")
 			return
@@ -111,50 +118,41 @@ func (file *File) init() error {
 		//
 		//
 
-		var keys []string
-		var body [][]string
-		var longest int
-		sheetCnt := x.Sheets()
-		// println("sheetCnt:", sheetCnt)
-		for sheeti := 0; sheeti < sheetCnt; sheeti++ {
-			rowCnt := x.Rows(sheeti)
-			// println("rowCnt:", rowCnt)
-			for rowi := 0; rowi < rowCnt; rowi++ {
-				ln := make([]string, x.Cols(sheeti, rowi))
-				lnL := len(ln)
-				if lnL > longest {
-					longest = lnL
-				}
-				// println("colCnt:", len(ln))
-				for coli := 0; coli < lnL; coli++ {
-					ln[coli] = x.Cell(sheeti, rowi, coli)
-				}
-				if keys == nil {
-					keys = ln
-					continue
-				}
-				body = append(body, ln)
-			}
-		}
-		if len(keys) < longest {
-			for i, ln := range body {
-				if len(ln) == longest {
-					keys = ln
-					body = body[i+1:]
-					break
+		var (
+			bigKeys [][]string
+			bigBody [][][]string
+		)
+		for _, rows := range sheets {
+			var (
+				longest int
+				keys    []string
+				body    [][]string
+			)
+			for i, cells := range rows {
+				if len(cells) > longest {
+					longest = len(cells)
+					keys = cells
+					body = rows[i+1:]
 				}
 			}
+			bigKeys = append(bigKeys, keys)
+			bigBody = append(bigBody, body)
 		}
-
-		// if ext == ".xls" {
-		// fmt.Println(keys)
-		// fmt.Println(body)
-		// }
+		var (
+			keys []string
+			body [][]string
+		)
+		if len(bigKeys) > 0 {
+			keys = bigKeys[0]
+		}
+		for _, bod := range bigBody {
+			body = append(body, bod...)
+		}
 
 		switch {
 		case len(keys) == 0:
 			initErr = errors.New("empty file")
-		case len(body) == sheetCnt:
+		case len(body) == 0:
 			initErr = errors.New("no values in file")
 		default:
 			file.keys = keys
@@ -168,8 +166,7 @@ func (file *File) init() error {
 // in the value pointed to by ptr.
 func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	if err := file.init(); err != nil {
-		// println(`1`)
-		return err
+		return Err{err}
 	}
 
 	// filter out string options
@@ -217,8 +214,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	for i := 0; i < len(cols); i++ {
 		col, err := abbrev(rstructt.Field(i).Name, file.keys...)
 		if err != nil {
-			// println(`2`)
-			return err
+			return Err{err}
 		}
 		cols[i] = col
 	}
@@ -233,8 +229,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
-					// println(`3`)
-					return err
+					return Err{err}
 				}
 				rfld.Set(rfld2)
 			}
@@ -243,7 +238,6 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		}
 
 		rv.Set(rsl)
-		// println(`4`)
 		return nil
 	}
 
@@ -257,26 +251,27 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		}
 		keyCol, err := abbrev(key, file.keys...)
 		if err != nil {
-			// println(`5`)
-			return err
+			return Err{err}
 		}
 
 		for _, ln := range file.body {
+			if keyCol >= len(ln) {
+				continue
+			}
+
 			rstruct := reflect.New(rstructt).Elem()
 
 			key := ln[keyCol]
 			rkey, err := parse(rkeyt, key)
 			if err != nil {
-				// println(`6`)
-				return errors.New("could not parse time '" + key + "'")
+				return Err{errors.New("could not parse time '" + key + "'")}
 			}
 
 			for f, col := range cols {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
-					// println(`7`)
-					return err
+					return Err{err}
 				}
 				rfld.Set(rfld2)
 			}
@@ -297,18 +292,18 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 // Save saves the Excel file.
 func (file *File) Save(name string) error {
 	if err := file.init(); err != nil {
-		return err
+		return Err{err}
 	}
 
 	f, err := os.Create(name)
 	if err != nil {
-		return err
+		return Err{err}
 	}
 	defer f.Close()
 
 	w := csv.NewWriter(f)
 	w.Comma = file.Comma
-	return w.WriteAll(append(append([][]string{}, file.keys), file.body...))
+	return Err{w.WriteAll(append(append([][]string{}, file.keys), file.body...))}
 }
 
 func parse(rt reflect.Type, v string) (reflect.Value, error) {
