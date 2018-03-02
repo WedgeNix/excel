@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/extrame/xls"
+	"github.com/WedgeNix/xls"
 	"github.com/tealeg/xlsx"
 )
 
@@ -33,6 +33,7 @@ var layouts = [...]string{
 	time.StampMilli,
 	time.StampMicro,
 	time.StampNano,
+	"2006-01-02 15:04:05",
 	"2006/1/_2",
 	"2006/01/02",
 	"1/_2/2006",
@@ -41,6 +42,10 @@ var layouts = [...]string{
 	"2006-01-02",
 	"1-_2-2006",
 	"01-02-2006",
+	"01-02-06",
+	"1-_2-06",
+	"01/02/06",
+	"1/_2/06",
 }
 
 var excel = File{
@@ -97,7 +102,7 @@ func (file *File) init() error {
 				initErr = err
 				return
 			}
-			x = xlsf{f}
+			x = csvf{f.ReadAllCells()}
 		default:
 			initErr = errors.New("'" + ext + "' is not an Excel format")
 			return
@@ -108,12 +113,20 @@ func (file *File) init() error {
 
 		var keys []string
 		var body [][]string
+		var longest int
 		sheetCnt := x.Sheets()
+		// println("sheetCnt:", sheetCnt)
 		for sheeti := 0; sheeti < sheetCnt; sheeti++ {
 			rowCnt := x.Rows(sheeti)
+			// println("rowCnt:", rowCnt)
 			for rowi := 0; rowi < rowCnt; rowi++ {
 				ln := make([]string, x.Cols(sheeti, rowi))
-				for coli := 0; coli < len(ln); coli++ {
+				lnL := len(ln)
+				if lnL > longest {
+					longest = lnL
+				}
+				// println("colCnt:", len(ln))
+				for coli := 0; coli < lnL; coli++ {
 					ln[coli] = x.Cell(sheeti, rowi, coli)
 				}
 				if keys == nil {
@@ -123,6 +136,20 @@ func (file *File) init() error {
 				body = append(body, ln)
 			}
 		}
+		if len(keys) < longest {
+			for i, ln := range body {
+				if len(ln) == longest {
+					keys = ln
+					body = body[i+1:]
+					break
+				}
+			}
+		}
+
+		// if ext == ".xls" {
+		// fmt.Println(keys)
+		// fmt.Println(body)
+		// }
 
 		switch {
 		case len(keys) == 0:
@@ -141,6 +168,7 @@ func (file *File) init() error {
 // in the value pointed to by ptr.
 func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	if err := file.init(); err != nil {
+		// println(`1`)
 		return err
 	}
 
@@ -189,6 +217,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	for i := 0; i < len(cols); i++ {
 		col, err := abbrev(rstructt.Field(i).Name, file.keys...)
 		if err != nil {
+			// println(`2`)
 			return err
 		}
 		cols[i] = col
@@ -204,6 +233,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
+					// println(`3`)
 					return err
 				}
 				rfld.Set(rfld2)
@@ -213,6 +243,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		}
 
 		rv.Set(rsl)
+		// println(`4`)
 		return nil
 	}
 
@@ -226,6 +257,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		}
 		keyCol, err := abbrev(key, file.keys...)
 		if err != nil {
+			// println(`5`)
 			return err
 		}
 
@@ -235,13 +267,15 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 			key := ln[keyCol]
 			rkey, err := parse(rkeyt, key)
 			if err != nil {
-				return err
+				// println(`6`)
+				return errors.New("could not parse time '" + key + "'")
 			}
 
 			for f, col := range cols {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
+					// println(`7`)
 					return err
 				}
 				rfld.Set(rfld2)
@@ -308,7 +342,7 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 			}
 		}
 		if x == (time.Time{}) && len(v) > 0 {
-			return rv, errors.New("bad time format")
+			return rv, errors.New("bad time format '" + v + "'")
 		}
 		rv.Set(reflect.ValueOf(x))
 	}
@@ -348,7 +382,7 @@ func abbrev(sub string, strs ...string) (int, error) {
 	}
 
 	if len(matches[0]) == 0 {
-		return -1, errors.New("no match for '" + sub + "'")
+		return -1, errors.New("no match for '" + sub + "' in {" + strings.Join(strs, ", ") + "}")
 	} else if len(matches) > 1 {
 		return -1, errors.New(sub + "=" + fmt.Sprint(matches) + " (too many matches)")
 	}
