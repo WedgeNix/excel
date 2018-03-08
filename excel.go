@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -48,14 +49,10 @@ var layouts = [...]string{
 	"1/_2/06",
 }
 
+var labelEx = regexp.MustCompile(`[A-Za-z]+`)
+
 var excel = File{
 	Comma: ',',
-}
-
-type Err struct{ error }
-
-func (e Err) Error() string {
-	return "excel: " + error(e).Error()
 }
 
 // File is the generic Excel API controller.
@@ -72,13 +69,17 @@ type File struct {
 func (file *File) init() error {
 	var initErr error
 	file.initOnce.Do(func() {
+		if len(file.Name) == 0 {
+			initErr = errors.New("excel: no file name")
+			return
+		}
 		if file.Comma == 0 {
 			file.Comma = excel.Comma
 		}
 
 		var sheets [][][]string
 
-		ext := filepath.Ext(file.Name)
+		ext := strings.ToLower(filepath.Ext(file.Name))
 		switch ext {
 		case ".xlsx":
 			c, err := xlsx.FileToSlice(file.Name)
@@ -91,18 +92,27 @@ func (file *File) init() error {
 			f, err := os.Open(file.Name)
 			if err != nil {
 				initErr = err
+				println("csv err 1")
 				return
 			}
 			r := csv.NewReader(f)
 			r.Comma = file.Comma
 			r.LazyQuotes = true
-			c, err := r.ReadAll()
-			if err != nil {
-				initErr = err
-				return
+			var records [][]string
+			for {
+				var record []string
+				record, err = r.Read()
+				if err == io.EOF {
+					break
+				}
+				if err != nil && !strings.Contains(err.Error(), csv.ErrFieldCount.Error()) {
+					initErr = err
+					return
+				}
+				records = append(records, record)
 			}
 			f.Close()
-			sheets = [][][]string{c}
+			sheets = [][][]string{records}
 		case ".xls":
 			f, err := xls.Open(file.Name, "")
 			if err != nil {
@@ -129,11 +139,22 @@ func (file *File) init() error {
 				body    [][]string
 			)
 			for i, cells := range rows {
-				if len(cells) > longest {
-					longest = len(cells)
-					keys = cells
-					body = rows[i+1:]
+				if len(cells) <= longest {
+					continue
 				}
+				isKeys := true
+				for _, cell := range cells {
+					if !labelEx.MatchString(cell) {
+						isKeys = false
+						break
+					}
+				}
+				if !isKeys {
+					continue
+				}
+				longest = len(cells)
+				keys = cells
+				body = rows[i+1:]
 			}
 			bigKeys = append(bigKeys, keys)
 			bigBody = append(bigBody, body)
@@ -166,8 +187,9 @@ func (file *File) init() error {
 // in the value pointed to by ptr.
 func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	if err := file.init(); err != nil {
-		return Err{err}
+		return fmt.Errorf("excel: %v", err)
 	}
+	// println("excel: file.init()!")
 
 	// filter out string options
 	strs := layouts[:]
@@ -214,10 +236,11 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	for i := 0; i < len(cols); i++ {
 		col, err := abbrev(rstructt.Field(i).Name, file.keys...)
 		if err != nil {
-			return Err{err}
+			return fmt.Errorf("excel: %v", err)
 		}
 		cols[i] = col
 	}
+	// println("excel: key cols()!")
 
 	if IsSlice {
 		rsl := reflect.New(rslt).Elem()
@@ -229,13 +252,14 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
-					return Err{err}
+					return fmt.Errorf("excel: %v", err)
 				}
 				rfld.Set(rfld2)
 			}
 
 			rsl = reflect.Append(rsl, rstruct)
 		}
+		// println("excel: file.body!")
 
 		rv.Set(rsl)
 		return nil
@@ -251,8 +275,9 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		}
 		keyCol, err := abbrev(key, file.keys...)
 		if err != nil {
-			return Err{err}
+			return fmt.Errorf("excel: %v", err)
 		}
+		// println("excel: keyCol!")
 
 		for _, ln := range file.body {
 			if keyCol >= len(ln) {
@@ -264,14 +289,14 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 			key := ln[keyCol]
 			rkey, err := parse(rkeyt, key)
 			if err != nil {
-				return Err{errors.New("could not parse time '" + key + "'")}
+				return errors.New("excel: could not parse time '" + key + "'")
 			}
 
 			for f, col := range cols {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
-					return Err{err}
+					return fmt.Errorf("excel: %v", err)
 				}
 				rfld.Set(rfld2)
 			}
@@ -282,6 +307,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 			}
 			rmap.SetMapIndex(rkey, reflect.Append(rmapsl2, rstruct))
 		}
+		// println("excel: file.body!")
 
 		rv.Set(rmap)
 	}
@@ -289,24 +315,34 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	return nil
 }
 
+// Add adds lines to the file's underlying body.
+func (file *File) Add(lines ...[]string) {
+	file.body = append(file.body, lines...)
+}
+
 // Save saves the Excel file.
 func (file *File) Save(name string) error {
 	if err := file.init(); err != nil {
-		return Err{err}
+		return fmt.Errorf("excel: %v", err)
 	}
 
 	f, err := os.Create(name)
 	if err != nil {
-		return Err{err}
+		return fmt.Errorf("excel: %v", err)
 	}
 	defer f.Close()
 
 	w := csv.NewWriter(f)
 	w.Comma = file.Comma
-	return Err{w.WriteAll(append(append([][]string{}, file.keys), file.body...))}
+	if err := w.WriteAll(append(append([][]string{}, file.keys), file.body...)); err != nil {
+		return fmt.Errorf("excel: %v", err)
+	}
+
+	return nil
 }
 
 func parse(rt reflect.Type, v string) (reflect.Value, error) {
+	v = strings.Trim(v, " ")
 	rv := reflect.New(rt).Elem()
 	switch rv.Kind() {
 	case reflect.String:
