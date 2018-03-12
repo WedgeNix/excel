@@ -209,7 +209,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	rv := reflect.Indirect(rptr)
 	rt := rv.Type()
 
-	var IsMap, IsSlice bool
+	var IsMap, IsSlice, IsStruct bool
 	rslt := rt
 	switch rt.Kind() {
 	case reflect.Map:
@@ -217,16 +217,22 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		rslt = rv.Type().Elem()
 	case reflect.Slice:
 		IsSlice = true
+	case reflect.Struct:
+		IsStruct = true
 	default:
-		panic("not a map or slice")
+		panic("not a map, slice, or struct")
+	}
+
+	if IsStruct {
+		rslt = reflect.SliceOf(rt)
 	}
 
 	if rslt.Kind() != reflect.Slice {
-		panic("not a slice map")
+		panic("not a slice")
 	}
 	rstructt := rslt.Elem()
 	if rstructt.Kind() != reflect.Struct {
-		panic("not a struct slice map")
+		panic("not a struct")
 	}
 
 	//
@@ -242,8 +248,10 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	}
 	// println("excel: key cols()!")
 
-	if IsSlice {
+	if IsSlice || IsStruct {
 		rsl := reflect.New(rslt).Elem()
+		flds := map[int]byte{}
+		rfirst := reflect.New(rstructt).Elem()
 
 		for _, ln := range file.body {
 			rstruct := reflect.New(rstructt).Elem()
@@ -254,10 +262,24 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 				if err != nil {
 					return fmt.Errorf("excel: %v", err)
 				}
-				rfld.Set(rfld2)
+				if IsStruct {
+					if len(flds) == len(cols) {
+						rv.Set(rfirst)
+						return nil
+					}
+					if _, found := flds[f]; len(ln[col]) == 0 || found {
+						continue
+					}
+					rfirst.Field(f).Set(rfld2)
+					flds[f] = 0
+				} else {
+					rfld.Set(rfld2)
+				}
 			}
 
-			rsl = reflect.Append(rsl, rstruct)
+			if IsSlice {
+				rsl = reflect.Append(rsl, rstruct)
+			}
 		}
 		// println("excel: file.body!")
 
@@ -289,7 +311,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 			key := ln[keyCol]
 			rkey, err := parse(rkeyt, key)
 			if err != nil {
-				return errors.New("excel: could not parse time '" + key + "'")
+				return errors.New("excel: could not parse '" + key + "'")
 			}
 
 			for f, col := range cols {
