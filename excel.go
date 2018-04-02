@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,6 +50,16 @@ var layouts = [...]string{
 	"1/_2/06",
 }
 
+type Error struct {
+	Func string
+	Msg  string
+	Err  error
+}
+
+func (e *Error) Error() string {
+	return "excel." + e.Func + ": " + e.Msg + ": " + e.Err.Error()
+}
+
 var labelEx = regexp.MustCompile(`[A-Za-z]+`)
 
 var excel = File{
@@ -70,7 +81,7 @@ func (file *File) init() error {
 	var initErr error
 	file.initOnce.Do(func() {
 		if len(file.Name) == 0 {
-			initErr = errors.New("excel: no file name")
+			initErr = errors.New("no file name")
 			return
 		}
 		if file.Comma == 0 {
@@ -79,20 +90,25 @@ func (file *File) init() error {
 
 		var sheets [][][]string
 
-		ext := strings.ToLower(filepath.Ext(file.Name))
+		name, err := regef(file.Name)
+		if err != nil {
+			initErr = err
+			return
+		}
+
+		ext := strings.ToLower(filepath.Ext(name))
 		switch ext {
 		case ".xlsx":
-			c, err := xlsx.FileToSlice(file.Name)
+			c, err := xlsx.FileToSlice(name)
 			if err != nil {
 				initErr = err
 				return
 			}
 			sheets = c
 		case ".csv", ".txt":
-			f, err := os.Open(file.Name)
+			f, err := os.Open(name)
 			if err != nil {
 				initErr = err
-				println("csv err 1")
 				return
 			}
 			r := csv.NewReader(f)
@@ -114,7 +130,7 @@ func (file *File) init() error {
 			f.Close()
 			sheets = [][][]string{records}
 		case ".xls":
-			f, err := xls.Open(file.Name, "")
+			f, err := xls.Open(name, "")
 			if err != nil {
 				initErr = err
 				return
@@ -183,13 +199,172 @@ func (file *File) init() error {
 	return initErr
 }
 
+// Unmarshal2 parses the excel-encoded data and stores the result
+// in the value pointed to by ptr.
+// func (file *File) Unmarshal2(ptr interface{}, opt ...interface{}) error {
+// 	if err := file.init(); err != nil {
+// 		return &Error{"Unmarshal", "init", err}
+// 	}
+
+// 	// filter out string options
+// 	strs := layouts[:]
+// 	for _, o := range opt {
+// 		if str, ok := o.(string); ok {
+// 			strs = append(strs, str)
+// 		}
+// 	}
+
+// 	//
+// 	//
+
+// 	rptr := reflect.ValueOf(ptr)
+// 	if rptr.Kind() != reflect.Ptr {
+// 		panic("not a pointer")
+// 	}
+// 	rv := reflect.Indirect(rptr)
+// 	rt := rv.Type()
+// 	rmapt := rt
+// 	rslt := rt
+// 	rstructt := rt
+
+// 	var (
+// 		IsMap   bool
+// 		IsSlice bool
+// 	)
+
+// 	switch rt.Kind() {
+// 	case reflect.Map:
+// 		IsMap = true
+
+// 		rslt = rmapt.Elem()
+// 		switch rslt.Kind() {
+// 		case reflect.Slice:
+// 			IsSlice = true
+
+// 			rstructt = rslt.Elem()
+
+// 		case reflect.Struct:
+// 			rstructt = rslt
+
+// 		default:
+// 			panic("not a slice or struct")
+// 		}
+
+// 	case reflect.Slice:
+// 		IsSlice = true
+
+// 		rmapt = reflect.MapOf(reflect.TypeOf(""), rslt)
+
+// 	case reflect.Struct:
+// 		rslt = reflect.SliceOf(rt)
+// 		rmapt = reflect.MapOf(reflect.TypeOf(""), rslt)
+
+// 	default:
+// 		panic("not a map, slice or struct")
+// 	}
+
+// 	//
+// 	//
+
+// 	cols := make([]int, rstructt.NumField())
+// 	for i := 0; i < len(cols); i++ {
+// 		col, err := abbrev(rstructt.Field(i).Name, file.keys...)
+// 		if err != nil {
+// 			return &Error{"Unmarshal", "abbreviation", err}
+// 		}
+// 		cols[i] = col
+// 	}
+
+// 	if !IsMap && (IsSlice || IsStruct) {
+// 		rsl := reflect.New(rslt).Elem()
+// 		flds := map[int]byte{}
+// 		rfirst := reflect.New(rstructt).Elem()
+
+// 		for _, ln := range file.body {
+// 			rstruct := reflect.New(rstructt).Elem()
+
+// 			for f, col := range cols {
+// 				rfld := rstruct.Field(f)
+// 				rfld2, err := parse(rfld.Type(), ln[col])
+// 				if err != nil {
+// 					return &Error{"Unmarshal", "parsing data", err}
+// 				}
+// 				if IsStruct {
+// 					if len(flds) == len(cols) {
+// 						rv.Set(rfirst)
+// 						return nil
+// 					}
+// 					if _, found := flds[f]; len(ln[col]) == 0 || found {
+// 						continue
+// 					}
+// 					rfirst.Field(f).Set(rfld2)
+// 					flds[f] = 0
+// 				} else {
+// 					rfld.Set(rfld2)
+// 				}
+// 			}
+
+// 			if IsSlice {
+// 				rsl = reflect.Append(rsl, rstruct)
+// 			}
+// 		}
+
+// 		rv.Set(rsl)
+// 		return nil
+// 	}
+
+// 	rkeyt := rt.Key()
+// 	rmap := reflect.MakeMap(rt)
+
+// 	key := rslt.Name()
+// 	if len(key) == 0 {
+// 		key = rstructt.Name()
+// 	}
+// 	keyCol, err := abbrev(key, file.keys...)
+// 	if err != nil {
+// 		return &Error{"Unmarshal", "abbreviation", err}
+// 	}
+
+// 	for _, ln := range file.body {
+// 		if keyCol >= len(ln) {
+// 			continue
+// 		}
+
+// 		rstruct := reflect.New(rstructt).Elem()
+
+// 		key := ln[keyCol]
+// 		rkey, err := parse(rkeyt, key)
+// 		if err != nil {
+// 			return &Error{"Unmarshal", "parsing key", err}
+// 		}
+
+// 		for f, col := range cols {
+// 			rfld := rstruct.Field(f)
+// 			rfld2, err := parse(rfld.Type(), ln[col])
+// 			if err != nil {
+// 				return &Error{"Unmarshal", "parsing data", err}
+// 			}
+// 			rfld.Set(rfld2)
+// 		}
+
+// 		rmapsl2 := rmap.MapIndex(rkey)
+// 		if rmapsl2.Kind() == reflect.Invalid {
+// 			rmapsl2 = reflect.New(rslt).Elem()
+// 		}
+// 		rmap.SetMapIndex(rkey, reflect.Append(rmapsl2, rstruct))
+// 	}
+
+// 	// rv.Set(rmap)
+
+// 	return nil
+// }
+
 // Unmarshal parses the excel-encoded data and stores the result
 // in the value pointed to by ptr.
 func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	if err := file.init(); err != nil {
-		return fmt.Errorf("excel: %v", err)
+		return &Error{"Unmarshal", "init", err}
 	}
-	// println("excel: file.init()!")
 
 	// filter out string options
 	strs := layouts[:]
@@ -227,12 +402,15 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		rslt = reflect.SliceOf(rt)
 	}
 
-	if rslt.Kind() != reflect.Slice {
-		panic("not a slice")
-	}
-	rstructt := rslt.Elem()
-	if rstructt.Kind() != reflect.Struct {
-		panic("not a struct")
+	rstructt := rslt
+	switch rslt.Kind() {
+	case reflect.Slice:
+		rstructt = rslt.Elem()
+		IsSlice = true
+	case reflect.Struct:
+		IsStruct = true
+	default:
+		panic("not a slice or struct")
 	}
 
 	//
@@ -242,13 +420,12 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 	for i := 0; i < len(cols); i++ {
 		col, err := abbrev(rstructt.Field(i).Name, file.keys...)
 		if err != nil {
-			return fmt.Errorf("excel: %v", err)
+			return &Error{"Unmarshal", "abbreviation", err}
 		}
 		cols[i] = col
 	}
-	// println("excel: key cols()!")
 
-	if IsSlice || IsStruct {
+	if !IsMap && (IsSlice || IsStruct) {
 		rsl := reflect.New(rslt).Elem()
 		flds := map[int]byte{}
 		rfirst := reflect.New(rstructt).Elem()
@@ -260,7 +437,7 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
-					return fmt.Errorf("excel: %v", err)
+					return &Error{"Unmarshal", "parsing data", err}
 				}
 				if IsStruct {
 					if len(flds) == len(cols) {
@@ -281,7 +458,6 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 				rsl = reflect.Append(rsl, rstruct)
 			}
 		}
-		// println("excel: file.body!")
 
 		rv.Set(rsl)
 		return nil
@@ -297,9 +473,8 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 		}
 		keyCol, err := abbrev(key, file.keys...)
 		if err != nil {
-			return fmt.Errorf("excel: %v", err)
+			return &Error{"Unmarshal", "abbreviation", err}
 		}
-		// println("excel: keyCol!")
 
 		for _, ln := range file.body {
 			if keyCol >= len(ln) {
@@ -311,14 +486,14 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 			key := ln[keyCol]
 			rkey, err := parse(rkeyt, key)
 			if err != nil {
-				return errors.New("excel: could not parse '" + key + "'")
+				return &Error{"Unmarshal", "parsing key", err}
 			}
 
 			for f, col := range cols {
 				rfld := rstruct.Field(f)
 				rfld2, err := parse(rfld.Type(), ln[col])
 				if err != nil {
-					return fmt.Errorf("excel: %v", err)
+					return &Error{"Unmarshal", "parsing data", err}
 				}
 				rfld.Set(rfld2)
 			}
@@ -329,7 +504,6 @@ func (file *File) Unmarshal(ptr interface{}, opt ...interface{}) error {
 			}
 			rmap.SetMapIndex(rkey, reflect.Append(rmapsl2, rstruct))
 		}
-		// println("excel: file.body!")
 
 		rv.Set(rmap)
 	}
@@ -345,19 +519,19 @@ func (file *File) Add(lines ...[]string) {
 // Save saves the Excel file.
 func (file *File) Save(name string) error {
 	if err := file.init(); err != nil {
-		return fmt.Errorf("excel: %v", err)
+		return &Error{"Save", "init", err}
 	}
 
 	f, err := os.Create(name)
 	if err != nil {
-		return fmt.Errorf("excel: %v", err)
+		return &Error{"Save", "creating file", err}
 	}
 	defer f.Close()
 
 	w := csv.NewWriter(f)
 	w.Comma = file.Comma
 	if err := w.WriteAll(append(append([][]string{}, file.keys), file.body...)); err != nil {
-		return fmt.Errorf("excel: %v", err)
+		return &Error{"Save", "writing data", err}
 	}
 
 	return nil
@@ -368,7 +542,7 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 	rv := reflect.New(rt).Elem()
 	switch rv.Kind() {
 	case reflect.String:
-		rv.Set(reflect.ValueOf(v))
+		rv.Set(reflect.ValueOf(v).Convert(rt))
 
 	case reflect.Float64:
 		v = strings.Replace(v, ",", "", -1)
@@ -376,7 +550,7 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 		if err != nil && len(v) > 0 {
 			return rv, err
 		}
-		rv.Set(reflect.ValueOf(x))
+		rv.Set(reflect.ValueOf(x).Convert(rt))
 
 	case reflect.Int:
 		v = strings.Replace(v, ",", "", -1)
@@ -384,7 +558,7 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 		if err != nil && len(v) > 0 {
 			return rv, err
 		}
-		rv.Set(reflect.ValueOf(x))
+		rv.Set(reflect.ValueOf(x).Convert(rt))
 
 	case reflect.ValueOf(time.Time{}).Kind():
 		var x time.Time
@@ -397,7 +571,7 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 		if x == (time.Time{}) && len(v) > 0 {
 			return rv, errors.New("bad time format '" + v + "'")
 		}
-		rv.Set(reflect.ValueOf(x))
+		rv.Set(reflect.ValueOf(x).Convert(rt))
 	}
 
 	return rv, nil
@@ -440,4 +614,35 @@ func abbrev(sub string, strs ...string) (int, error) {
 		return -1, errors.New(sub + "=" + fmt.Sprint(matches) + " (too many matches)")
 	}
 	return n, nil
+}
+
+// regef finds a file matching the expression. If not found,
+// it finds a match for the assumed regular expression.
+func regef(expr string) (string, error) {
+	if _, err := os.Stat(expr); err != nil {
+		ex, err2 := regexp.Compile(`(?i)` + expr)
+		if err2 != nil {
+			return "", err
+		}
+		dir := ""
+		if i := strings.LastIndex(expr, "/"); i > -1 {
+			dir = expr[:i]
+		}
+		var matches []string
+		if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			path = strings.Replace(path, `\`, "/", -1)
+			if ex.MatchString(path) {
+				matches = append(matches, path)
+			}
+			return nil
+		}); err != nil {
+			return "", err
+		}
+		if len(matches) == 0 {
+			return "", errors.New("no matches")
+		}
+		sort.Strings(matches)
+		return matches[0], nil
+	}
+	return expr, nil
 }
