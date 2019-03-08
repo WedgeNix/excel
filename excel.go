@@ -72,77 +72,76 @@ type File struct {
 
 	Name  string
 	Comma rune
-
-	keys []string
-	body [][]string
+	// raw sheet daya if no file.
+	Sheets [][][]string
+	keys   []string
+	body   [][]string
 }
 
 func (file *File) init() error {
 	var initErr error
 	file.initOnce.Do(func() {
-		if len(file.Name) == 0 {
-			initErr = errors.New("no file name")
-			return
-		}
-		if file.Comma == 0 {
-			file.Comma = excel.Comma
-		}
+		sheets := file.Sheets
+		if len(sheets) < 0 {
+			if len(file.Name) == 0 {
+				initErr = errors.New("no file name")
+				return
+			}
+			if file.Comma == 0 {
+				file.Comma = excel.Comma
+			}
 
-		var sheets [][][]string
-
-		name, err := regef(file.Name)
-		if err != nil {
-			initErr = err
-			return
-		}
-
-		ext := strings.ToLower(filepath.Ext(name))
-		switch ext {
-		case ".xlsx":
-			c, err := xlsx.FileToSlice(name)
+			name, err := regef(file.Name)
 			if err != nil {
 				initErr = err
 				return
 			}
-			sheets = c
-		case ".csv", ".txt":
-			f, err := os.Open(name)
-			if err != nil {
-				initErr = err
-				return
-			}
-			r := csv.NewReader(f)
-			r.Comma = file.Comma
-			r.LazyQuotes = true
-			var records [][]string
-			for {
-				var record []string
-				record, err = r.Read()
-				if err == io.EOF {
-					break
-				}
-				if err != nil && !strings.Contains(err.Error(), csv.ErrFieldCount.Error()) {
+
+			ext := strings.ToLower(filepath.Ext(name))
+			switch ext {
+			case ".xlsx":
+				c, err := xlsx.FileToSlice(name)
+				if err != nil {
 					initErr = err
 					return
 				}
-				records = append(records, record)
-			}
-			f.Close()
-			sheets = [][][]string{records}
-		case ".xls":
-			f, err := xls.Open(name, "")
-			if err != nil {
-				initErr = err
+				sheets = c
+			case ".csv", ".txt":
+				f, err := os.Open(name)
+				if err != nil {
+					initErr = err
+					return
+				}
+				r := csv.NewReader(f)
+				r.Comma = file.Comma
+				r.LazyQuotes = true
+				var records [][]string
+				for {
+					var record []string
+					record, err = r.Read()
+					if err == io.EOF {
+						break
+					}
+					if err != nil && !strings.Contains(err.Error(), csv.ErrFieldCount.Error()) {
+						initErr = err
+						return
+					}
+					records = append(records, record)
+				}
+				f.Close()
+				sheets = [][][]string{records}
+			case ".xls":
+				f, err := xls.Open(name, "")
+				if err != nil {
+					initErr = err
+					return
+				}
+				sheets = [][][]string{f.ReadAllCells()}
+			default:
+				initErr = errors.New("'" + ext + "' is not an Excel format")
 				return
 			}
-			sheets = [][][]string{f.ReadAllCells()}
-		default:
-			initErr = errors.New("'" + ext + "' is not an Excel format")
-			return
 		}
-
-		//
-		//
 
 		var (
 			bigKeys [][]string
@@ -548,7 +547,10 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 		v = strings.Replace(v, ",", "", -1)
 		x, err := strconv.ParseFloat(v, 64)
 		if err != nil && len(v) > 0 {
-			return rv, err
+			x, err = clean(v)
+			if err != nil {
+				return rv, err
+			}
 		}
 		rv.Set(reflect.ValueOf(x).Convert(rt))
 
@@ -575,6 +577,18 @@ func parse(rt reflect.Type, v string) (reflect.Value, error) {
 	}
 
 	return rv, nil
+}
+
+func clean(s string) (float64, error) {
+	mess, err := regexp.Compile("[0-9.,]+")
+	if err != nil {
+		return 0, err
+	}
+	amt, err := strconv.ParseFloat(mess.FindString(s), 64)
+	if err != nil {
+		return 0, err
+	}
+	return amt / 100, nil
 }
 
 func abbrev(sub string, strs ...string) (int, error) {
