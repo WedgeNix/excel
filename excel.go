@@ -588,7 +588,12 @@ func clean(s string) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return amt / 100, nil
+
+	if strings.Contains(s, "%") {
+		amt = amt / 100
+	}
+
+	return amt, nil
 }
 
 func abbrev(sub string, strs ...string) (int, error) {
